@@ -99,12 +99,21 @@ async function yakindakileriGetir() {
   durum('Yakındaki yerler aranıyor…');
   const u = 'https://tr.wikipedia.org/w/api.php?action=query&list=geosearch&format=json&origin=*'
     + `&gscoord=${konum.lat}|${konum.lon}&gsradius=${YARICAP_M}&gslimit=40`;
-  try {
-    const j = await (await fetch(u)).json();
-    const yeni = (j.query?.geosearch || []).filter(y => !anlatilan.has(y.pageid));
-    kuyruk = yeni.sort((a, b) => a.dist - b.dist);
-    durum(kuyruk.length ? `Yakında ${kuyruk.length} hikâye var.` : 'Yakında anlatılacak yer yok, yola devam…');
-  } catch { durum('İnternet bağlantısı yok, tekrar denenecek.'); }
+  // Vikipedi arama sunucusu bazen "çok yoğun" hatası döner; birkaç kez yeniden dene
+  for (let deneme = 0; deneme < 4; deneme++) {
+    try {
+      const j = await (await fetch(u)).json();
+      if (j.error) throw new Error(j.error.code);
+      const yeni = (j.query?.geosearch || []).filter(y => !anlatilan.has(y.pageid));
+      kuyruk = yeni.sort((a, b) => a.dist - b.dist);
+      durum(kuyruk.length ? `Yakında ${kuyruk.length} hikâye var.` : 'Yakında anlatılacak yer yok, yola devam…');
+      return;
+    } catch { await new Promise(r => setTimeout(r, 2000 * (deneme + 1))); }
+  }
+  // Olmadıysa bir sonraki konumda hemen yeniden aransın
+  sonSorgu = null;
+  durum('Bağlantı zayıf, tekrar denenecek.');
+  setTimeout(() => { if (calisiyor && !sonSorgu) konumGeldi({ coords: { latitude: konum.lat, longitude: konum.lon } }); }, 15000);
 }
 
 async function sonrakiniAnlat() {
@@ -114,7 +123,10 @@ async function sonrakiniAnlat() {
   anlatilan.add(y.pageid);
   const u = 'https://tr.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&exsentences=4&format=json&origin=*&pageids=' + y.pageid;
   let metin = '';
-  try { metin = Object.values((await (await fetch(u)).json()).query.pages)[0].extract || ''; } catch {}
+  for (let deneme = 0; deneme < 3 && !metin; deneme++) {
+    try { metin = Object.values((await (await fetch(u)).json()).query.pages)[0].extract || ''; break; }
+    catch { await new Promise(r => setTimeout(r, 2000)); }
+  }
   metin = metin.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
   if (metin.length < 60) return sonrakiniAnlat();
   simdiki = sonHikaye = { baslik: y.title, metin, dist: y.dist };
