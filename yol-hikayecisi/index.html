@@ -72,7 +72,7 @@ $('basla').onclick = async () => {
   $('baslangic').style.display = 'none';
   calisiyor = true;
   // iOS konuşmayı ancak dokunuşla başlatır; boş bir cümleyle kilidi aç
-  speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+  if (!TTS && window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance(''));
   try { kilit = await navigator.wakeLock?.request('screen'); } catch {}
   durum('Konum alınıyor…');
   izleyici = navigator.geolocation.watchPosition(konumGeldi, h => durum('Konum alınamadı: ' + h.message), { enableHighAccuracy: true, maximumAge: 10000 });
@@ -92,7 +92,7 @@ async function konumGeldi(p) {
   if (bekle) return;
   sonSorgu = { ...konum, t: Date.now() };
   await yakindakileriGetir();
-  if (!simdiki && !speechSynthesis.speaking) sonrakiniAnlat();
+  if (!simdiki && !konusuyor) sonrakiniAnlat();
 }
 
 async function yakindakileriGetir() {
@@ -138,16 +138,31 @@ async function sonrakiniAnlat() {
   konus(`${y.title}. ${metin}`);
 }
 
-let turkceSes = null;
+// Android uygulamasında WebView konuşamaz, telefonun kendi sesli okuması kullanılır
+const TTS = window.Capacitor?.Plugins?.TextToSpeech;
+let turkceSes = null, konusuyor = false, konusmaNo = 0;
 function sesSec() { turkceSes = speechSynthesis.getVoices().find(v => v.lang?.toLowerCase().startsWith('tr')) || null; }
-speechSynthesis.onvoiceschanged = sesSec; sesSec();
+if (!TTS && window.speechSynthesis) { speechSynthesis.onvoiceschanged = sesSec; sesSec(); }
+
+function sus() {
+  konusmaNo++; konusuyor = false;
+  if (TTS) TTS.stop().catch(() => {}); else window.speechSynthesis?.cancel();
+}
 
 function konus(t) {
-  speechSynthesis.cancel();
+  sus();
+  const no = konusmaNo; konusuyor = true;
+  // Bir hikâye bitince kısa bir aradan sonra sıradakine geç
+  const bitti = () => {
+    if (no !== konusmaNo) return;
+    konusuyor = false; simdiki = null;
+    if (calisiyor) setTimeout(() => { if (!konusuyor) sonrakiniAnlat(); }, 20000);
+  };
+  if (TTS) { TTS.speak({ text: t, lang: 'tr-TR', rate: 0.95, category: 'playback' }).then(bitti, bitti); return; }
+  if (!window.speechSynthesis) { konusuyor = false; return; }
   const s = new SpeechSynthesisUtterance(t);
   s.lang = 'tr-TR'; s.rate = 0.95; if (turkceSes) s.voice = turkceSes;
-  // Bir hikâye bitince kısa bir aradan sonra sıradakine geç
-  s.onend = () => { simdiki = null; if (calisiyor) setTimeout(() => { if (!speechSynthesis.speaking) sonrakiniAnlat(); }, 20000); };
+  s.onend = bitti;
   speechSynthesis.speak(s);
 }
 
@@ -157,10 +172,10 @@ function gecmiseEkle(t) {
 }
 
 $('tekrar').onclick = () => { if (sonHikaye) { calisiyor = true; konus(`${sonHikaye.baslik}. ${sonHikaye.metin}`); } };
-$('atla').onclick = () => { calisiyor = true; speechSynthesis.cancel(); sonrakiniAnlat(); };
+$('atla').onclick = () => { calisiyor = true; sus(); sonrakiniAnlat(); };
 $('dur').onclick = () => {
   calisiyor = !calisiyor;
-  if (!calisiyor) { speechSynthesis.cancel(); $('dur').textContent = '▶ Devam'; }
+  if (!calisiyor) { sus(); $('dur').textContent = '▶ Devam'; }
   else { $('dur').textContent = '⏸ Durdur'; sonrakiniAnlat(); }
 };
 
