@@ -59,6 +59,8 @@ language sql security definer set search_path = public as $$
   update kediler set asili = yeni_asili, kisir = yeni_kisir where id = kayit;
 $$;
 
+revoke execute on function public.sikayet_et(text, uuid) from public;
+revoke execute on function public.kedi_saglik(uuid, boolean, boolean) from public;
 grant execute on function public.sikayet_et(text, uuid) to anon;
 grant execute on function public.kedi_saglik(uuid, boolean, boolean) to anon;
 

@@ -1,6 +1,6 @@
 // Yerdeki Sesler ve Sokak Kedisi'nin ortak veritabanı bağlantısı.
 // Supabase "app-factory" projesi açılınca url ve key (publishable) buraya yazılır.
-window.SUPA = { url: '', key: '' };
+window.SUPA = { url: 'https://jqseccozepunvmfwktjf.supabase.co', key: 'sb_publishable_BzTedmJkD4cp1bM_3txyIg_vd02Kw-p' };
 
 window.supaHazir = () => !!(window.SUPA.url && window.SUPA.key);
 
