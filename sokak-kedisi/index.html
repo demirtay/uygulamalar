@@ -105,7 +105,7 @@ async function baslat() {
   if (!supaHazir()) { uyari('Uygulama kuruluyor, çok yakında açılıyor.'); return; }
   db = supabase.createClient(SUPA.url, SUPA.key);
   harita = L.map('harita', { zoomControl: false }).setView([41.01, 28.97], 16);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(harita);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(harita);
   try { konum = await konumAl(); } catch { uyari('Konum izni gerekli. Ayarlardan konuma izin verip sayfayı yenile.'); return; }
   harita.setView([konum.lat, konum.lon], 17);
   L.circleMarker([konum.lat, konum.lon], { radius: 8, color: '#fff', fillColor: '#ff9f43', fillOpacity: 1 }).addTo(harita);
