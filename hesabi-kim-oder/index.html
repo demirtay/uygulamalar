@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#14110f">
+<title>Hesabı Kim Öder?</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<style>
+  :root { --bg:#14110f; --fg:#fff7e8; --acc:#ffb300; --red:#e5262f; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; overflow:hidden; user-select:none; }
+  .ekran { position:fixed; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; padding:24px; text-align:center; gap:20px; }
+  .ekran.aktif { display:flex; }
+  h1 { font-size:clamp(34px,10vw,56px); line-height:1.05; font-weight:900; letter-spacing:-1px; }
+  h1 span { color:var(--acc); }
+  p { font-size:18px; opacity:.85; max-width:340px; line-height:1.4; }
+  button { font:inherit; font-size:22px; font-weight:800; border:0; border-radius:999px; padding:18px 40px; background:var(--acc); color:#14110f; cursor:pointer; }
+  button.ikincil { background:transparent; color:var(--fg); border:2px solid #fff4; font-size:17px; padding:12px 28px; }
+  .para { font-size:72px; }
+  #geriSayim { font-size:140px; font-weight:900; color:var(--acc); }
+  #sure { font-size:64px; font-weight:900; font-variant-numeric:tabular-nums; color:var(--acc); }
+  #kaybetti { background:var(--red); }
+  #kaybetti.yanip { animation:yanip .35s steps(2) infinite; }
+  @keyframes yanip { 50% { background:#14110f; } }
+  #kaybetti h1 { font-size:clamp(48px,15vw,90px); }
+  .kural { font-size:15px; opacity:.6; }
+  .secim { display:flex; gap:8px; }
+  .secim button { font-size:15px; padding:10px 16px; background:transparent; color:var(--fg); border:2px solid #fff3; }
+  .secim button.secili { border-color:var(--acc); color:var(--acc); }
+</style>
+</head>
+<body>
+
+<section class="ekran aktif" id="giris">
+  <div class="para">💸</div>
+  <h1>Hesabı<br><span>Kim Öder?</span></h1>
+  <p>Herkes telefonunu masaya koyar. Telefonuna ilk dokunan hesabı öder.</p>
+  <button id="basla">Oyunu Başlat</button>
+  <div class="secim" id="hassasiyet">
+    <button data-esik="2.2">Hafif</button>
+    <button data-esik="1.2" class="secili">Normal</button>
+    <button data-esik="0.6">Acımasız</button>
+  </div>
+  <p class="kural">Herkes aynı anda başlatsın. Telefonu masaya ekranı aşağı bakacak şekilde koy.</p>
+</section>
+
+<section class="ekran" id="hazirlik">
+  <p>Telefonu masaya koy</p>
+  <div id="geriSayim">5</div>
+  <p class="kural">Sayım bitince oyun başlar. Kıpırdarsa yakalanırsın!</p>
+</section>
+
+<section class="ekran" id="oyun">
+  <p>Dayanıyorsun…</p>
+  <div id="sure">00:00</div>
+  <p class="kural">Telefonuna dokunma. Dokunursan herkes duyar.</p>
+</section>
+
+<section class="ekran" id="kaybetti">
+  <div class="para">🧾</div>
+  <h1>HESAP<br>SENDE!</h1>
+  <p id="sonuc"></p>
+  <button id="sustur">Sustur</button>
+  <button class="ikincil" id="tekrar">Yeni Tur</button>
+</section>
+
+<section class="ekran" id="sensorYok">
+  <h1>😕</h1>
+  <p>Bu cihazda hareket sensörü bulunamadı. Uygulamayı telefonda aç.</p>
+  <button class="ikincil" onclick="location.reload()">Tekrar dene</button>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+let esik = 1.2, taban = null, ornekler = [], izleme = false, baslangic = 0, sayac, kilit = null, ses = null, bitti = false;
+
+function goster(id) {
+  document.querySelectorAll('.ekran').forEach(e => e.classList.toggle('aktif', e.id === id));
+}
+
+$('hassasiyet').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  esik = parseFloat(b.dataset.esik);
+  [...$('hassasiyet').children].forEach(x => x.classList.toggle('secili', x === b));
+});
+
+async function izinAl() {
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    try { return (await DeviceMotionEvent.requestPermission()) === 'granted'; } catch { return false; }
+  }
+  return typeof DeviceMotionEvent !== 'undefined';
+}
+
+async function ekranAcikKalsin() {
+  try { kilit = await navigator.wakeLock?.request('screen'); } catch {}
+}
+
+$('basla').onclick = async () => {
+  sesHazirla();
+  if (!(await izinAl())) { goster('sensorYok'); return; }
+  await ekranAcikKalsin();
+  bitti = false; izleme = false; taban = null; ornekler = [];
+  goster('hazirlik');
+  let n = 5; $('geriSayim').textContent = n;
+  const t = setInterval(() => {
+    n--;
+    if (n > 0) { $('geriSayim').textContent = n; return; }
+    clearInterval(t);
+    kalibreEt();
+  }, 1000);
+};
+
+// Telefon masada dururken 1 sn boyunca yerçekimi vektörünü ölç, sonra sapmayı izle
+function kalibreEt() {
+  ornekler = [];
+  setTimeout(() => {
+    if (!ornekler.length) { goster('sensorYok'); return; }
+    taban = ornekler.reduce((a, o) => [a[0] + o[0], a[1] + o[1], a[2] + o[2]], [0, 0, 0]).map(v => v / ornekler.length);
+    izleme = true; baslangic = Date.now();
+    goster('oyun');
+    sayac = setInterval(() => { $('sure').textContent = sureYaz(Date.now() - baslangic); }, 500);
+  }, 1000);
+}
+
+window.addEventListener('devicemotion', e => {
+  const a = e.accelerationIncludingGravity; if (!a || a.x === null) return;
+  const v = [a.x, a.y, a.z];
+  if (!izleme) { ornekler.push(v); return; }
+  const sapma = Math.hypot(v[0] - taban[0], v[1] - taban[1], v[2] - taban[2]);
+  const r = e.rotationRate, donus = r ? Math.max(Math.abs(r.alpha || 0), Math.abs(r.beta || 0), Math.abs(r.gamma || 0)) : 0;
+  if (sapma > esik || donus > esik * 25) yakalandi();
+});
+
+function yakalandi() {
+  if (bitti) return;
+  bitti = true; izleme = false; clearInterval(sayac);
+  $('sonuc').textContent = sureYaz(Date.now() - baslangic) + ' dayandın. Cüzdanı çıkar 😄';
+  goster('kaybetti'); $('kaybetti').classList.add('yanip');
+  siren(true);
+  navigator.vibrate?.([400, 150, 400, 150, 400, 150, 800]);
+}
+
+function sureYaz(ms) {
+  const s = Math.floor(ms / 1000);
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+
+// iOS'ta ses ancak dokunuşla açılır; başlat düğmesinde hazırlanıyor
+function sesHazirla() {
+  if (ses) return;
+  const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+  ses = new C();
+}
+
+let sirenDugum = null, sirenZaman = null;
+function siren(ac) {
+  if (!ses) return;
+  if (!ac) { sirenDugum?.stop(); sirenDugum = null; clearInterval(sirenZaman); return; }
+  ses.resume();
+  const o = ses.createOscillator(), g = ses.createGain();
+  o.type = 'square'; g.gain.value = 0.35;
+  o.connect(g).connect(ses.destination); o.start();
+  let yuksek = false;
+  sirenZaman = setInterval(() => { yuksek = !yuksek; o.frequency.setValueAtTime(yuksek ? 1250 : 820, ses.currentTime); }, 280);
+  sirenDugum = o;
+}
+
+$('sustur').onclick = () => { siren(false); $('kaybetti').classList.remove('yanip'); };
+$('tekrar').onclick = () => { siren(false); $('kaybetti').classList.remove('yanip'); goster('giris'); };
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && izleme) ekranAcikKalsin();
+  // Ekranı kilitlemek ya da uygulamadan çıkmak da kaybettirir
+  if (document.visibilityState === 'hidden' && izleme) yakalandi();
+});
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

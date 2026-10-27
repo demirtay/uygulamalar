@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1a2a">
+<title>Yol Hikâyecisi</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<style>
+  :root { --bg:#0f1a2a; --fg:#eef4ff; --acc:#5ec8ff; --soluk:#9fb3cc; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html,body { min-height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:520px; margin:auto; padding:28px 16px 40px; display:flex; flex-direction:column; gap:18px; min-height:100vh; }
+  h1 { font-size:clamp(32px,9vw,46px); font-weight:900; letter-spacing:-1px; }
+  h1 span { color:var(--acc); }
+  p { line-height:1.5; }
+  .soluk { color:var(--soluk); font-size:15px; }
+  button { font:inherit; font-size:20px; font-weight:800; border:0; border-radius:999px; padding:16px 32px; background:var(--acc); color:#0f1a2a; cursor:pointer; }
+  button.ikincil { background:transparent; color:var(--fg); border:2px solid #ffffff33; font-size:16px; padding:10px 20px; }
+  .kart { background:#182841; border-radius:20px; padding:20px; display:none; flex-direction:column; gap:12px; }
+  .kart.aktif { display:flex; }
+  .kart h2 { font-size:26px; }
+  .kart .mesafe { color:var(--acc); font-weight:700; font-size:14px; }
+  .kart .metin { font-size:18px; }
+  .dugmeler { display:flex; gap:10px; flex-wrap:wrap; }
+  #durum { color:var(--soluk); font-size:15px; min-height:22px; }
+  .gecmis { display:flex; flex-direction:column; gap:6px; }
+  .gecmis div { font-size:14px; color:var(--soluk); }
+  .alt { margin-top:auto; font-size:12px; color:var(--soluk); }
+  .alt a { color:var(--soluk); }
+</style>
+</head>
+<body>
+<main>
+  <h1>🚗 Yol<br><span>Hikâyecisi</span></h1>
+  <p>Yolculukta yanından geçtiğin köyü, kasabayı, kaleyi ve dağı sesli anlatır. Ekrana bakmana gerek yok.</p>
+
+  <div id="baslangic">
+    <button id="basla">Yola Çık</button>
+    <p class="soluk" style="margin-top:12px">Konum izni ister. Ses açık olsun. Telefonu araç tutucusuna koy.</p>
+  </div>
+
+  <div id="durum"></div>
+
+  <div class="kart" id="kart">
+    <div class="mesafe" id="mesafe"></div>
+    <h2 id="baslik"></h2>
+    <div class="metin" id="metin"></div>
+    <div class="dugmeler">
+      <button class="ikincil" id="tekrar">🔁 Tekrar anlat</button>
+      <button class="ikincil" id="atla">⏭ Sonraki</button>
+      <button class="ikincil" id="dur">⏸ Durdur</button>
+    </div>
+  </div>
+
+  <div class="gecmis" id="gecmis"></div>
+
+  <div class="alt">Bilgiler <a href="https://tr.wikipedia.org" target="_blank" rel="noopener">Vikipedi</a>'den alınır (CC BY-SA).</div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const anlatilan = new Set();
+let sonHikaye = null, konum = null, sonSorgu = null, izleyici = null, calisiyor = false, kuyruk = [], simdiki = null, kilit = null;
+const ARALIK_M = 1500, YARICAP_M = 10000;
+
+function durum(t) { $('durum').textContent = t; }
+
+$('basla').onclick = async () => {
+  if (!navigator.geolocation) { durum('Bu cihazda konum yok.'); return; }
+  $('baslangic').style.display = 'none';
+  calisiyor = true;
+  // iOS konuşmayı ancak dokunuşla başlatır; boş bir cümleyle kilidi aç
+  speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+  try { kilit = await navigator.wakeLock?.request('screen'); } catch {}
+  durum('Konum alınıyor…');
+  izleyici = navigator.geolocation.watchPosition(konumGeldi, h => durum('Konum alınamadı: ' + h.message), { enableHighAccuracy: true, maximumAge: 10000 });
+};
+
+function mesafe(a, b) {
+  const R = 6371000, r = x => x * Math.PI / 180;
+  const d1 = r(b.lat - a.lat), d2 = r(b.lon - a.lon);
+  const h = Math.sin(d1 / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(d2 / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function konumGeldi(p) {
+  konum = { lat: p.coords.latitude, lon: p.coords.longitude };
+  // Ya 1,5 km ilerlenmişse ya da sıra boşken 1 dakika geçmişse yeniden ara
+  const bekle = sonSorgu && (kuyruk.length ? mesafe(sonSorgu, konum) < ARALIK_M : Date.now() - sonSorgu.t < 60000);
+  if (bekle) return;
+  sonSorgu = { ...konum, t: Date.now() };
+  await yakindakileriGetir();
+  if (!simdiki && !speechSynthesis.speaking) sonrakiniAnlat();
+}
+
+async function yakindakileriGetir() {
+  durum('Yakındaki yerler aranıyor…');
+  const u = 'https://tr.wikipedia.org/w/api.php?action=query&list=geosearch&format=json&origin=*'
+    + `&gscoord=${konum.lat}|${konum.lon}&gsradius=${YARICAP_M}&gslimit=40`;
+  try {
+    const j = await (await fetch(u)).json();
+    const yeni = (j.query?.geosearch || []).filter(y => !anlatilan.has(y.pageid));
+    kuyruk = yeni.sort((a, b) => a.dist - b.dist);
+    durum(kuyruk.length ? `Yakında ${kuyruk.length} hikâye var.` : 'Yakında anlatılacak yer yok, yola devam…');
+  } catch { durum('İnternet bağlantısı yok, tekrar denenecek.'); }
+}
+
+async function sonrakiniAnlat() {
+  if (!calisiyor) return;
+  const y = kuyruk.shift();
+  if (!y) { simdiki = null; durum('Yeni yerler bekleniyor…'); return; }
+  anlatilan.add(y.pageid);
+  const u = 'https://tr.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&exsentences=4&format=json&origin=*&pageids=' + y.pageid;
+  let metin = '';
+  try { metin = Object.values((await (await fetch(u)).json()).query.pages)[0].extract || ''; } catch {}
+  metin = metin.replace(/\s*\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+  if (metin.length < 60) return sonrakiniAnlat();
+  simdiki = sonHikaye = { baslik: y.title, metin, dist: y.dist };
+  $('baslik').textContent = y.title;
+  $('mesafe').textContent = y.dist < 1000 ? `${Math.round(y.dist)} m yakında` : `${(y.dist / 1000).toFixed(1)} km uzakta`;
+  $('metin').textContent = metin;
+  $('kart').classList.add('aktif');
+  gecmiseEkle(y.title);
+  konus(`${y.title}. ${metin}`);
+}
+
+let turkceSes = null;
+function sesSec() { turkceSes = speechSynthesis.getVoices().find(v => v.lang?.toLowerCase().startsWith('tr')) || null; }
+speechSynthesis.onvoiceschanged = sesSec; sesSec();
+
+function konus(t) {
+  speechSynthesis.cancel();
+  const s = new SpeechSynthesisUtterance(t);
+  s.lang = 'tr-TR'; s.rate = 0.95; if (turkceSes) s.voice = turkceSes;
+  // Bir hikâye bitince kısa bir aradan sonra sıradakine geç
+  s.onend = () => { simdiki = null; if (calisiyor) setTimeout(() => { if (!speechSynthesis.speaking) sonrakiniAnlat(); }, 20000); };
+  speechSynthesis.speak(s);
+}
+
+function gecmiseEkle(t) {
+  const d = document.createElement('div'); d.textContent = '✓ ' + t;
+  $('gecmis').prepend(d);
+}
+
+$('tekrar').onclick = () => { if (sonHikaye) { calisiyor = true; konus(`${sonHikaye.baslik}. ${sonHikaye.metin}`); } };
+$('atla').onclick = () => { calisiyor = true; speechSynthesis.cancel(); sonrakiniAnlat(); };
+$('dur').onclick = () => {
+  calisiyor = !calisiyor;
+  if (!calisiyor) { speechSynthesis.cancel(); $('dur').textContent = '▶ Devam'; }
+  else { $('dur').textContent = '⏸ Durdur'; sonrakiniAnlat(); }
+};
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

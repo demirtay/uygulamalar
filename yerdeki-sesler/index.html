@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1c1230">
+<title>Yerdeki Sesler</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#1c1230; --fg:#f6efff; --acc:#c48bff; --soluk:#b9a8d6; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  #harita { position:fixed; inset:0; z-index:1; }
+  .ust { position:fixed; top:0; left:0; right:0; z-index:5; padding:14px 16px; background:linear-gradient(#1c1230ee,#1c123000); pointer-events:none; }
+  .ust h1 { font-size:24px; font-weight:900; } .ust h1 span { color:var(--acc); }
+  .ust p { font-size:13px; color:var(--soluk); }
+  .alt { position:fixed; left:0; right:0; bottom:0; z-index:5; padding:16px; padding-bottom:max(16px,env(safe-area-inset-bottom)); display:flex; justify-content:center; }
+  button { font:inherit; font-weight:800; border:0; border-radius:999px; padding:16px 28px; font-size:18px; background:var(--acc); color:#1c1230; cursor:pointer; }
+  button.ikincil { background:transparent; color:var(--fg); border:2px solid #ffffff33; font-size:15px; padding:10px 18px; }
+  .panel { position:fixed; left:0; right:0; bottom:0; z-index:10; background:#2a1d45; border-radius:24px 24px 0 0; padding:22px 16px; padding-bottom:max(22px,env(safe-area-inset-bottom)); display:none; flex-direction:column; gap:14px; max-width:560px; margin:auto; }
+  .panel.aktif { display:flex; }
+  .panel h2 { font-size:22px; }
+  .panel input { font:inherit; font-size:17px; padding:14px; border-radius:14px; border:2px solid #ffffff22; background:#1c1230; color:var(--fg); width:100%; }
+  .satir { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .kayit-dugme { width:96px; height:96px; border-radius:50%; font-size:40px; padding:0; }
+  .kayit-dugme.kayitta { background:#ff4d6d; animation:nabiz 1s infinite; }
+  @keyframes nabiz { 50% { transform:scale(1.08); } }
+  .soluk { color:var(--soluk); font-size:14px; }
+  #uyari { position:fixed; inset:0; z-index:20; background:var(--bg); display:none; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:24px; gap:16px; }
+  #uyari.aktif { display:flex; }
+  .leaflet-container { background:#1c1230; }
+</style>
+</head>
+<body>
+<div id="harita"></div>
+<div class="ust"><h1>📍 Yerdeki <span>Sesler</span></h1><p>Bir yere ses bırak. Oradan geçen herkes dinleyebilir.</p></div>
+<div class="alt"><button id="birak">🎙️ Buraya ses bırak</button></div>
+
+<div class="panel" id="kayitPanel">
+  <h2>Bu noktaya ses bırak</h2>
+  <input id="baslik" maxlength="80" placeholder="Başlık (ör. İlk buluşmamız burada)">
+  <div class="satir">
+    <button class="kayit-dugme" id="kayit">🎙️</button>
+    <div><div id="kayitSure" style="font-size:28px;font-weight:800">0 / 60 sn</div><div class="soluk">Basılı tutma, bir kez dokun. En fazla 60 saniye.</div></div>
+  </div>
+  <audio id="onizleme" controls style="width:100%;display:none"></audio>
+  <div class="satir">
+    <button id="kaydet" disabled>Bırak</button>
+    <button class="ikincil" id="vazgec">Vazgeç</button>
+  </div>
+  <div class="soluk">Kişisel bilgi, hakaret ya da başkasının sesini bırakma. Şikâyet edilen sesler kaldırılır.</div>
+</div>
+
+<div class="panel" id="dinlePanel">
+  <h2 id="dBaslik"></h2>
+  <div class="soluk" id="dBilgi"></div>
+  <audio id="dSes" controls style="width:100%"></audio>
+  <div id="dUzak" class="soluk"></div>
+  <div class="satir">
+    <button class="ikincil" id="dKapat">Kapat</button>
+    <button class="ikincil" id="dSikayet">🚩 Şikâyet et</button>
+  </div>
+</div>
+
+<div id="uyari"><h1 style="font-size:48px">🛠️</h1><p id="uyariMetin"></p></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../ortak.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DINLEME_M = 150, ARAMA_M = 3000;
+let sonSure = 1, db, harita, benIsaret, konum, kayitci, parcalar = [], kayitBas = 0, kayitSayac, blob = null, secili = null;
+const isaretler = new Map();
+
+function uyari(t) { $('uyariMetin').textContent = t; $('uyari').classList.add('aktif'); }
+
+async function baslat() {
+  if (!supaHazir()) { uyari('Uygulama kuruluyor, çok yakında açılıyor.'); return; }
+  db = supabase.createClient(SUPA.url, SUPA.key);
+  harita = L.map('harita', { zoomControl: false }).setView([41.01, 28.97], 15);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap, © CARTO', maxZoom: 19 }).addTo(harita);
+  try { konum = await konumAl(); } catch { uyari('Konum izni gerekli. Ayarlardan konuma izin verip sayfayı yenile.'); return; }
+  harita.setView([konum.lat, konum.lon], 16);
+  benIsaret = L.circleMarker([konum.lat, konum.lon], { radius: 8, color: '#fff', fillColor: '#c48bff', fillOpacity: 1 }).addTo(harita);
+  L.circle([konum.lat, konum.lon], { radius: DINLEME_M, color: '#c48bff', weight: 1, fillOpacity: .06 }).addTo(harita);
+  navigator.geolocation.watchPosition(p => {
+    konum = { lat: p.coords.latitude, lon: p.coords.longitude };
+    benIsaret.setLatLng([konum.lat, konum.lon]);
+  }, () => {}, { enableHighAccuracy: true, maximumAge: 10000 });
+  await sesleriGetir();
+  harita.on('moveend', sesleriGetir);
+}
+
+async function sesleriGetir() {
+  const m = harita.getCenter(), k = kutu({ lat: m.lat, lon: m.lng }, ARAMA_M);
+  const { data, error } = await db.from('sesler').select('id,lat,lon,baslik,dosya,sure_sn,olusturma')
+    .gte('lat', k.minLat).lte('lat', k.maxLat).gte('lon', k.minLon).lte('lon', k.maxLon).limit(300);
+  if (error) return;
+  for (const s of data) {
+    if (isaretler.has(s.id)) continue;
+    const i = L.marker([s.lat, s.lon], { icon: L.divIcon({ html: '🔊', className: '', iconSize: [28, 28] }) })
+      .addTo(harita).on('click', () => dinleAc(s));
+    isaretler.set(s.id, i);
+  }
+}
+
+function dinleAc(s) {
+  secili = s;
+  $('dBaslik').textContent = s.baslik;
+  $('dBilgi').textContent = new Date(s.olusturma).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' }) + (s.sure_sn ? ` · ${s.sure_sn} sn` : '');
+  const uzak = mesafeM(konum, s);
+  // Ses sadece o noktaya gidince açılır; asıl fikir bu
+  if (uzak > DINLEME_M) {
+    $('dSes').style.display = 'none';
+    $('dUzak').textContent = `Bu sesi dinlemek için oraya git. ${uzak < 1000 ? Math.round(uzak) + ' m' : (uzak / 1000).toFixed(1) + ' km'} uzaktasın.`;
+  } else {
+    $('dUzak').textContent = '';
+    $('dSes').style.display = 'block';
+    $('dSes').src = db.storage.from('sesler').getPublicUrl(s.dosya).data.publicUrl;
+    $('dSes').play().catch(() => {});
+  }
+  $('dinlePanel').classList.add('aktif');
+}
+
+$('dKapat').onclick = () => { $('dSes').pause(); $('dinlePanel').classList.remove('aktif'); };
+$('dSikayet').onclick = async () => {
+  if (!secili) return;
+  await db.rpc('sikayet_et', { tablo: 'sesler', kayit: secili.id });
+  $('dSikayet').textContent = 'Teşekkürler';
+};
+
+$('birak').onclick = () => { blob = null; $('kaydet').disabled = true; $('onizleme').style.display = 'none'; $('kayitPanel').classList.add('aktif'); };
+$('vazgec').onclick = () => { kayitDur(); $('kayitPanel').classList.remove('aktif'); };
+
+$('kayit').onclick = async () => {
+  if (kayitci?.state === 'recording') { kayitDur(); return; }
+  let akis;
+  try { akis = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { alert('Mikrofon izni gerekli.'); return; }
+  parcalar = [];
+  kayitci = new MediaRecorder(akis);
+  kayitci.ondataavailable = e => parcalar.push(e.data);
+  kayitci.onstop = () => {
+    akis.getTracks().forEach(t => t.stop());
+    blob = new Blob(parcalar, { type: kayitci.mimeType || 'audio/webm' });
+    $('onizleme').src = URL.createObjectURL(blob); $('onizleme').style.display = 'block';
+    $('kaydet').disabled = false;
+  };
+  kayitci.start(); kayitBas = Date.now();
+  $('kayit').classList.add('kayitta'); $('kayit').textContent = '⏹';
+  kayitSayac = setInterval(() => {
+    const s = Math.floor((Date.now() - kayitBas) / 1000);
+    $('kayitSure').textContent = `${s} / 60 sn`;
+    if (s >= 60) kayitDur();
+  }, 250);
+};
+
+function kayitDur() {
+  clearInterval(kayitSayac);
+  if (kayitci?.state === 'recording') sonSure = Math.max(1, Math.min(60, Math.round((Date.now() - kayitBas) / 1000)));
+  if (kayitci?.state === 'recording') kayitci.stop();
+  $('kayit').classList.remove('kayitta'); $('kayit').textContent = '🎙️';
+}
+
+$('kaydet').onclick = async () => {
+  const baslik = $('baslik').value.trim();
+  if (!baslik) { $('baslik').focus(); return; }
+  if (!blob) return;
+  $('kaydet').disabled = true; $('kaydet').textContent = 'Yükleniyor…';
+  const uzanti = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+  const yol = `${crypto.randomUUID()}.${uzanti}`;
+  const y = await db.storage.from('sesler').upload(yol, blob, { contentType: blob.type.split(';')[0] });
+  if (y.error) { alert('Yüklenemedi: ' + y.error.message); $('kaydet').disabled = false; $('kaydet').textContent = 'Bırak'; return; }
+  const sure = sonSure;
+  const { error } = await db.from('sesler').insert({ lat: konum.lat, lon: konum.lon, baslik, dosya: yol, sure_sn: sure });
+  $('kaydet').textContent = 'Bırak';
+  if (error) { alert('Kaydedilemedi: ' + error.message); $('kaydet').disabled = false; return; }
+  $('kayitPanel').classList.remove('aktif'); $('baslik').value = '';
+  await sesleriGetir();
+};
+
+baslat();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

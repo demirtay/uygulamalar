@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#20160e">
+<title>Sokak Kedisi</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#20160e; --fg:#fff4e6; --acc:#ff9f43; --soluk:#d6bfa6; --kart:#33241a; }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  #harita { position:fixed; inset:0; z-index:1; }
+  .ust { position:fixed; top:0; left:0; right:0; z-index:5; padding:14px 16px; background:linear-gradient(#20160eee,#20160e00); pointer-events:none; }
+  .ust h1 { font-size:24px; font-weight:900; } .ust h1 span { color:var(--acc); }
+  .ust p { font-size:13px; color:var(--soluk); }
+  .alt { position:fixed; left:0; right:0; bottom:0; z-index:5; padding:16px; padding-bottom:max(16px,env(safe-area-inset-bottom)); display:flex; justify-content:center; }
+  button { font:inherit; font-weight:800; border:0; border-radius:999px; padding:16px 28px; font-size:18px; background:var(--acc); color:#20160e; cursor:pointer; }
+  button.ikincil { background:transparent; color:var(--fg); border:2px solid #ffffff33; font-size:15px; padding:10px 18px; }
+  button:disabled { opacity:.5; }
+  .panel { position:fixed; left:0; right:0; bottom:0; z-index:10; background:var(--kart); border-radius:24px 24px 0 0; padding:20px 16px; padding-bottom:max(20px,env(safe-area-inset-bottom)); display:none; flex-direction:column; gap:12px; max-width:560px; margin:auto; max-height:88vh; overflow-y:auto; }
+  .panel.aktif { display:flex; }
+  .panel h2 { font-size:22px; }
+  .panel input, .panel textarea { font:inherit; font-size:17px; padding:12px; border-radius:14px; border:2px solid #ffffff22; background:var(--bg); color:var(--fg); width:100%; }
+  .foto { width:100%; aspect-ratio:1; object-fit:cover; border-radius:18px; background:#000; }
+  .satir { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .soluk { color:var(--soluk); font-size:14px; }
+  .adaylar { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .adaylar div { text-align:center; font-size:13px; cursor:pointer; }
+  .adaylar img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:12px; border:3px solid transparent; }
+  .rozet { display:inline-block; padding:4px 10px; border-radius:999px; background:#ffffff14; font-size:14px; }
+  .rozet.iyi { background:#2e7d3233; color:#9be59f; }
+  label.kutu { display:flex; gap:8px; align-items:center; font-size:16px; }
+  label.kutu input { width:22px; height:22px; }
+  .kedi-isaret img { width:44px; height:44px; border-radius:50%; object-fit:cover; border:3px solid #ff9f43; box-shadow:0 2px 8px #0008; }
+  #uyari { position:fixed; inset:0; z-index:20; background:var(--bg); display:none; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:24px; gap:16px; }
+  #uyari.aktif { display:flex; }
+  #dosya { display:none; }
+</style>
+</head>
+<body>
+<div id="harita"></div>
+<div class="ust"><h1>🐈 Sokak <span>Kedisi</span></h1><p>Mahallenin kedilerini tanı, mama verdiysen işaretle.</p></div>
+<div class="alt"><button id="ekle">📷 Kedi fotoğrafla</button></div>
+<input type="file" id="dosya" accept="image/*" capture="environment">
+
+<!-- Yeni fotoğraf: önce yakındaki kayıtlı kedilerle karşılaştır -->
+<div class="panel" id="eslePanel">
+  <h2>Bu kedi kayıtlı mı?</h2>
+  <img class="foto" id="yeniFoto" alt="">
+  <div class="soluk" id="esleBilgi"></div>
+  <div class="adaylar" id="adaylar"></div>
+  <div class="satir">
+    <button id="yeniKedi">Hayır, yeni kedi</button>
+    <button class="ikincil" id="esleVazgec">Vazgeç</button>
+  </div>
+</div>
+
+<div class="panel" id="formPanel">
+  <h2>Yeni kedi</h2>
+  <input id="ad" maxlength="40" placeholder="Adı (ör. Pamuk)">
+  <textarea id="not" maxlength="300" rows="2" placeholder="Not (ör. sol kulağı kesik, çok sevecen)"></textarea>
+  <label class="kutu"><input type="checkbox" id="asili"> Aşılı</label>
+  <label class="kutu"><input type="checkbox" id="kisir"> Kısırlaştırılmış</label>
+  <div class="satir">
+    <button id="kaydet">Kaydet</button>
+    <button class="ikincil" id="formVazgec">Vazgeç</button>
+  </div>
+</div>
+
+<div class="panel" id="kediPanel">
+  <img class="foto" id="kFoto" alt="">
+  <h2 id="kAd"></h2>
+  <div class="soluk" id="kNot"></div>
+  <div class="satir" id="kRozet"></div>
+  <div style="font-size:17px" id="kMama"></div>
+  <div class="satir">
+    <button id="mamaVerdim">🍗 Mama verdim</button>
+    <button class="ikincil" id="kKapat">Kapat</button>
+  </div>
+  <div class="satir">
+    <button class="ikincil" id="kSaglik">Aşı / kısır bilgisini düzelt</button>
+    <button class="ikincil" id="kSikayet">🚩 Şikâyet</button>
+  </div>
+</div>
+
+<div id="uyari"><h1 style="font-size:48px">🛠️</h1><p id="uyariMetin"></p></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../ortak.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const ESLE_M = 250, ARAMA_M = 3000;
+let db, harita, konum, fotoBlob = null, secili = null;
+const isaretler = new Map();
+
+function uyari(t) { $('uyariMetin').textContent = t; $('uyari').classList.add('aktif'); }
+function panel(id) { document.querySelectorAll('.panel').forEach(p => p.classList.toggle('aktif', p.id === id)); }
+const fotoUrl = yol => db.storage.from('kediler').getPublicUrl(yol).data.publicUrl;
+
+async function baslat() {
+  if (!supaHazir()) { uyari('Uygulama kuruluyor, çok yakında açılıyor.'); return; }
+  db = supabase.createClient(SUPA.url, SUPA.key);
+  harita = L.map('harita', { zoomControl: false }).setView([41.01, 28.97], 16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(harita);
+  try { konum = await konumAl(); } catch { uyari('Konum izni gerekli. Ayarlardan konuma izin verip sayfayı yenile.'); return; }
+  harita.setView([konum.lat, konum.lon], 17);
+  L.circleMarker([konum.lat, konum.lon], { radius: 8, color: '#fff', fillColor: '#ff9f43', fillOpacity: 1 }).addTo(harita);
+  await kedileriGetir();
+  harita.on('moveend', kedileriGetir);
+}
+
+async function yakindakiKediler(merkez, metre) {
+  const k = kutu(merkez, metre);
+  const { data } = await db.from('kediler').select('*')
+    .gte('lat', k.minLat).lte('lat', k.maxLat).gte('lon', k.minLon).lte('lon', k.maxLon).limit(300);
+  return data || [];
+}
+
+async function kedileriGetir() {
+  const m = harita.getCenter();
+  for (const k of await yakindakiKediler({ lat: m.lat, lon: m.lng }, ARAMA_M)) {
+    if (isaretler.has(k.id)) continue;
+    const ikon = L.divIcon({ className: 'kedi-isaret', html: `<img src="${fotoUrl(k.foto)}" alt="">`, iconSize: [44, 44] });
+    isaretler.set(k.id, L.marker([k.lat, k.lon], { icon: ikon }).addTo(harita).on('click', () => kediAc(k)));
+  }
+}
+
+async function kediAc(k) {
+  secili = k;
+  $('kFoto').src = fotoUrl(k.foto);
+  $('kAd').textContent = k.ad;
+  $('kNot').textContent = k.not_ || '';
+  rozetler();
+  $('kMama').textContent = 'Yükleniyor…';
+  $('mamaVerdim').disabled = false; $('mamaVerdim').textContent = '🍗 Mama verdim';
+  $('kSikayet').textContent = '🚩 Şikâyet';
+  panel('kediPanel');
+  const { data } = await db.from('mama_kayitlari').select('zaman').eq('kedi_id', k.id).order('zaman', { ascending: false }).limit(1);
+  $('kMama').textContent = data?.length ? `Son mama: ${once(data[0].zaman)}` : 'Henüz mama kaydı yok.';
+}
+
+function rozetler() {
+  $('kRozet').innerHTML = '';
+  for (const [v, ad] of [[secili.asili, 'Aşılı'], [secili.kisir, 'Kısır']]) {
+    const s = document.createElement('span');
+    s.className = 'rozet' + (v ? ' iyi' : ''); s.textContent = (v ? '✓ ' : '✗ ') + ad;
+    $('kRozet').append(s);
+  }
+}
+
+function once(t) {
+  const dk = Math.round((Date.now() - new Date(t)) / 60000);
+  if (dk < 1) return 'az önce';
+  if (dk < 60) return `${dk} dakika önce`;
+  if (dk < 1440) return `${Math.round(dk / 60)} saat önce`;
+  return `${Math.round(dk / 1440)} gün önce`;
+}
+
+$('mamaVerdim').onclick = async () => {
+  $('mamaVerdim').disabled = true;
+  const { error } = await db.from('mama_kayitlari').insert({ kedi_id: secili.id });
+  $('mamaVerdim').textContent = error ? 'Olmadı, tekrar dene' : 'Teşekkürler 💛';
+  if (!error) $('kMama').textContent = 'Son mama: az önce';
+  else $('mamaVerdim').disabled = false;
+};
+
+$('kSaglik').onclick = async () => {
+  const asili = confirm(`${secili.ad} aşılı mı?\nTamam = Evet, İptal = Hayır`);
+  const kisir = confirm(`${secili.ad} kısırlaştırılmış mı?\nTamam = Evet, İptal = Hayır`);
+  const { error } = await db.rpc('kedi_saglik', { kayit: secili.id, yeni_asili: asili, yeni_kisir: kisir });
+  if (!error) { secili.asili = asili; secili.kisir = kisir; rozetler(); }
+};
+
+$('kSikayet').onclick = async () => { await db.rpc('sikayet_et', { tablo: 'kediler', kayit: secili.id }); $('kSikayet').textContent = 'Teşekkürler'; };
+$('kKapat').onclick = () => panel(null);
+
+$('ekle').onclick = () => $('dosya').click();
+
+$('dosya').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  fotoBlob = await kucult(f, 900);
+  $('yeniFoto').src = URL.createObjectURL(fotoBlob);
+  try { konum = await konumAl(); } catch {}
+  const yakin = (await yakindakiKediler(konum, ESLE_M))
+    .map(k => ({ ...k, m: mesafeM(konum, k) })).filter(k => k.m <= ESLE_M).sort((a, b) => a.m - b.m).slice(0, 9);
+  $('adaylar').innerHTML = '';
+  if (!yakin.length) { panel('formPanel'); return; }
+  $('esleBilgi').textContent = 'Yakında kayıtlı kediler var. Aynısıysa üstüne dokun:';
+  for (const k of yakin) {
+    const d = document.createElement('div');
+    d.innerHTML = `<img src="${fotoUrl(k.foto)}" alt=""><div></div>`;
+    d.lastChild.textContent = k.ad;
+    d.onclick = () => kediAc(k);
+    $('adaylar').append(d);
+  }
+  panel('eslePanel');
+};
+
+$('yeniKedi').onclick = () => panel('formPanel');
+$('esleVazgec').onclick = $('formVazgec').onclick = () => panel(null);
+
+$('kaydet').onclick = async () => {
+  const ad = $('ad').value.trim();
+  if (!ad) { $('ad').focus(); return; }
+  $('kaydet').disabled = true; $('kaydet').textContent = 'Kaydediliyor…';
+  const yol = `${crypto.randomUUID()}.jpg`;
+  const y = await db.storage.from('kediler').upload(yol, fotoBlob, { contentType: 'image/jpeg' });
+  let hata = y.error;
+  if (!hata) {
+    const r = await db.from('kediler').insert({ ad, not_: $('not').value.trim() || null, asili: $('asili').checked, kisir: $('kisir').checked, foto: yol, lat: konum.lat, lon: konum.lon });
+    hata = r.error;
+  }
+  $('kaydet').disabled = false; $('kaydet').textContent = 'Kaydet';
+  if (hata) { alert('Kaydedilemedi: ' + hata.message); return; }
+  ['ad', 'not'].forEach(i => $(i).value = ''); $('asili').checked = $('kisir').checked = false;
+  panel(null);
+  await kedileriGetir();
+};
+
+// Fotoğrafı yüklemeden önce küçült (veri ve depolama tasarrufu)
+function kucult(dosya, enBuyuk) {
+  return new Promise(ok => {
+    const img = new Image();
+    img.onload = () => {
+      const o = Math.min(1, enBuyuk / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * o); c.height = Math.round(img.height * o);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(ok, 'image/jpeg', 0.82);
+    };
+    img.src = URL.createObjectURL(dosya);
+  });
+}
+
+baslat();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
